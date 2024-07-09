@@ -544,7 +544,7 @@ int ast_channel_register(const struct ast_channel_tech *tech)
 
 	AST_RWLIST_TRAVERSE(&backends, chan, list) {
 		if (!strcasecmp(tech->type, chan->tech->type)) {
-			ast_log(LOG_WARNING, "Already have a handler for type '%s'\n", tech->type);
+			ast_log(LOG_WARNING, "Already have a handler for the type '%s'\n", tech->type);
 			AST_RWLIST_UNLOCK(&backends);
 			return -1;
 		}
