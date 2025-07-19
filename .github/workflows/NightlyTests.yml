@@ -12,7 +12,8 @@ on:
         description: "Array of test groups to run: ['ari1','channels'].  Defaults to NIGHTLYTEST_LIST"
 
   schedule:
-    - cron: '0 2 * * *'
+#            Monday-Saturday 2am
+    - cron: '0 2 * * 1-6'
 
 jobs:
   NightlyTests:
@@ -21,5 +22,4 @@ jobs:
     with:
       branches:   ${{ inputs.branches || vars.NIGHTLYTEST_BRANCHES }}
       group_list: ${{ inputs.group_list || vars.NIGHTLYTEST_LIST }}
-    secrets:
-      TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      realtime:   false

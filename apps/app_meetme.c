@@ -40,7 +40,6 @@
 	<support_level>deprecated</support_level>
 	<replacement>app_confbridge</replacement>
 	<deprecated_in>19</deprecated_in>
-	<removed_in>21</removed_in>
  ***/
 
 #include "asterisk.h"
@@ -79,6 +78,9 @@
 
 /*** DOCUMENTATION
 	<application name="MeetMe" language="en_US">
+		<since>
+			<version>0.1.12</version>
+		</since>
 		<synopsis>
 			MeetMe conference bridge.
 		</synopsis>
@@ -263,6 +265,9 @@
 		</see-also>
 	</application>
 	<application name="MeetMeCount" language="en_US">
+		<since>
+			<version>0.1.12</version>
+		</since>
 		<synopsis>
 			MeetMe participant count.
 		</synopsis>
@@ -284,6 +289,9 @@
 		</see-also>
 	</application>
 	<application name="MeetMeAdmin" language="en_US">
+		<since>
+			<version>1.0.0</version>
+		</since>
 		<synopsis>
 			MeetMe conference administration.
 		</synopsis>
@@ -381,6 +389,9 @@
 		</see-also>
 	</application>
 	<application name="MeetMeChannelAdmin" language="en_US">
+		<since>
+			<version>1.6.0</version>
+		</since>
 		<synopsis>
 			MeetMe conference Administration (channel specific).
 		</synopsis>
@@ -406,6 +417,9 @@
 		</description>
 	</application>
 	<function name="MEETME_INFO" language="en_US">
+		<since>
+			<version>1.6.1.0</version>
+		</since>
 		<synopsis>
 			Query a given conference of various properties.
 		</synopsis>
@@ -440,6 +454,9 @@
 		</see-also>
 	</function>
 	<manager name="MeetmeMute" language="en_US">
+		<since>
+			<version>1.4.0</version>
+		</since>
 		<synopsis>
 			Mute a Meetme user.
 		</synopsis>
@@ -452,6 +469,9 @@
 		</description>
 	</manager>
 	<manager name="MeetmeUnmute" language="en_US">
+		<since>
+			<version>1.4.0</version>
+		</since>
 		<synopsis>
 			Unmute a Meetme user.
 		</synopsis>
@@ -464,6 +484,9 @@
 		</description>
 	</manager>
 	<manager name="MeetmeList" language="en_US">
+		<since>
+			<version>1.6.0</version>
+		</since>
 		<synopsis>
 			List participants in a conference.
 		</synopsis>
@@ -480,6 +503,9 @@
 		</description>
 	</manager>
 	<manager name="MeetmeListRooms" language="en_US">
+		<since>
+			<version>10.0.0</version>
+		</since>
 		<synopsis>
 			List active conferences.
 		</synopsis>
@@ -494,6 +520,9 @@
 	</manager>
 	<managerEvent language="en_US" name="MeetmeJoin">
 		<managerEventInstance class="EVENT_FLAG_CALL">
+			<since>
+				<version>12.0.0</version>
+			</since>
 			<synopsis>Raised when a user joins a MeetMe conference.</synopsis>
 			<syntax>
 				<parameter name="Meetme">
@@ -512,6 +541,9 @@
 	</managerEvent>
 	<managerEvent language="en_US" name="MeetmeLeave">
 		<managerEventInstance class="EVENT_FLAG_CALL">
+			<since>
+				<version>12.0.0</version>
+			</since>
 			<synopsis>Raised when a user leaves a MeetMe conference.</synopsis>
 			<syntax>
 				<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter)" />
@@ -527,6 +559,9 @@
 	</managerEvent>
 	<managerEvent language="en_US" name="MeetmeEnd">
 		<managerEventInstance class="EVENT_FLAG_CALL">
+			<since>
+				<version>12.0.0</version>
+			</since>
 			<synopsis>Raised when a MeetMe conference ends.</synopsis>
 			<syntax>
 				<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter[@name='Meetme'])" />
@@ -538,6 +573,9 @@
 	</managerEvent>
 	<managerEvent language="en_US" name="MeetmeTalkRequest">
 		<managerEventInstance class="EVENT_FLAG_CALL">
+			<since>
+				<version>12.0.0</version>
+			</since>
 			<synopsis>Raised when a MeetMe user has started talking.</synopsis>
 			<syntax>
 				<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter)" />
@@ -556,6 +594,9 @@
 	</managerEvent>
 	<managerEvent language="en_US" name="MeetmeTalking">
 		<managerEventInstance class="EVENT_FLAG_CALL">
+			<since>
+				<version>12.0.0</version>
+			</since>
 			<synopsis>Raised when a MeetMe user begins or ends talking.</synopsis>
 			<syntax>
 				<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter)" />
@@ -566,6 +607,9 @@
 	</managerEvent>
 	<managerEvent language="en_US" name="MeetmeMute">
 		<managerEventInstance class="EVENT_FLAG_CALL">
+			<since>
+				<version>12.0.0</version>
+			</since>
 			<synopsis>Raised when a MeetMe user is muted or unmuted.</synopsis>
 			<syntax>
 				<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter)" />
@@ -576,6 +620,11 @@
 	</managerEvent>
 	<managerEvent language="en_US" name="MeetmeList">
 		<managerEventInstance class="EVENT_FLAG_CALL">
+			<since>
+				<version>16.29.0</version>
+				<version>18.15.0</version>
+				<version>19.7.0</version>
+			</since>
 			<synopsis>Raised in response to a MeetmeList command.</synopsis>
 			<syntax>
 				<parameter name="Conference">
@@ -623,6 +672,11 @@
 	</managerEvent>
 	<managerEvent language="en_US" name="MeetmeListRooms">
 		<managerEventInstance class="EVENT_FLAG_CALL">
+			<since>
+				<version>16.29.0</version>
+				<version>18.15.0</version>
+				<version>19.7.0</version>
+			</since>
 			<synopsis>Raised in response to a MeetmeListRooms command.</synopsis>
 			<syntax>
 				<parameter name="Conference">
@@ -638,7 +692,7 @@
 					<para>Total duration of conference in HH:MM:SS format.</para>
 				</parameter>
 				<parameter name="Creation">
-					<para>How the conference was created: "Dyanmic" or "Static".</para>
+					<para>How the conference was created: "Dynamic" or "Static".</para>
 				</parameter>
 				<parameter name="Locked">
 					<para>Whether or not the conference is locked.</para>

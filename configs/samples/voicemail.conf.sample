@@ -72,11 +72,6 @@ maxlogins=3
 ; sender can set the urgency on the envelope of the forwarded message.
 ;forward_urgent_auto=no
 ;
-; User context is where entries from users.conf are registered.  The
-; default value is 'default'
-;
-;userscontext=default
-;
 ; Aliases allow a mailbox to be referenced by an alias.  The aliases are
 ; specified in the special context named here.  There is no default.
 ;aliasescontext=myaliases
@@ -144,7 +139,7 @@ maxlogins=3
 ; -----------------------------------------------------------------------------
 ; Voicemail can be stored in a database using the ODBC driver.
 ;
-: Storage database:
+; Storage database:
 ; The value of odbcstorage is the database connection configured in
 ; res_odbc.conf.  This may be different from the name of the ODBC DSN
 ; in /etc/odbc.ini which, in turn, may be different from the name of the
@@ -219,7 +214,7 @@ maxlogins=3
 ; the file to write to the 'recording' column will be the first format
 ; listed in the 'format' option in this config file.  If the first
 ; format is 'wav49', the file to add to the database will be the one
-; with the 'WAV' extension. 
+; with the 'WAV' extension.
 
 ; odbc_audio_on_disk = no
 
@@ -411,7 +406,7 @@ sendvoicemail=yes ; Allow the user to compose and send a voicemail while inside
                     ; Supported options:
                     ;   voicemail.conf:
                     ;     This is the default option.  The secret is read from
-                    ;     and written to voicemail.conf (or users.conf).
+                    ;     and written to voicemail.conf.
                     ;   spooldir:
                     ;     The secret is stored in a separate file in the user's
                     ;     voicemail spool directory in a file named secret.conf.
@@ -419,7 +414,7 @@ sendvoicemail=yes ; Allow the user to compose and send a voicemail while inside
                     ;     permitted to access Asterisk's spool directory as the
                     ;     secret is stored in plain text.  If a secret is not
                     ;     found in this directory, the password in
-                    ;     voicemail.conf (or users.conf) will be used.
+                    ;     voicemail.conf will be used.
                     ; Note that this option does not affect password storage for
                     ; realtime users, which are still stored in the realtime
                     ; backend.

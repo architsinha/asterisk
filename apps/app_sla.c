@@ -59,6 +59,9 @@
 
 /*** DOCUMENTATION
 	<application name="SLAStation" language="en_US">
+		<since>
+			<version>21.0.0</version>
+		</since>
 		<synopsis>
 			Shared Line Appearance Station.
 		</synopsis>
@@ -86,6 +89,9 @@
 		</description>
 	</application>
 	<application name="SLATrunk" language="en_US">
+		<since>
+			<version>21.0.0</version>
+		</since>
 		<synopsis>
 			Shared Line Appearance Trunk.
 		</synopsis>
@@ -428,7 +434,7 @@ static const char *trunkstate2str(enum sla_trunk_state state)
 	S(SLA_TRUNK_STATE_ONHOLD)
 	S(SLA_TRUNK_STATE_ONHOLD_BYME)
 	}
-	return "Uknown State";
+	return "Unknown State";
 #undef S
 }
 

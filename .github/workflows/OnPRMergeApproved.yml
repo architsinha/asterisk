@@ -1,19 +1,14 @@
-name: PRMergeApproved
-run-name: "PR ${{github.event.number}} MergeApproved"
+name: PRMerge
+run-name: "PR ${{ github.event.number }} Merge by ${{ github.actor }}"
 on:
   pull_request_target:
-    types: [labeled]
-
-concurrency:
-  group: ${{github.workflow}}-${{github.event.label.name}}-${{github.event.number}}
-  cancel-in-progress: true
+    types: [ labeled ]
 
 jobs:
-  MergePR:
-    name: MergePR
+  PRMerge:
+    name: "run-merge"
     if: contains(fromJSON(vars.MERGE_APPROVED_LABELS), github.event.label.name)
-    uses: asterisk/asterisk-ci-actions/.github/workflows/AsteriskMergePR.yml@main
-# Merging requires a specific token or it'll get caught in the rules that
-# prevent merges by mortals.
-    secrets:
-      TOKEN: ${{ secrets.ASTERISKTEAM_PAT }}
+    concurrency:
+      group: merge-${{ github.triggering_actor }}-${{ github.head_ref }}
+      cancel-in-progress: true
+    uses: asterisk/asterisk-ci-actions/.github/workflows/AsteriskPRMerge.yml@main

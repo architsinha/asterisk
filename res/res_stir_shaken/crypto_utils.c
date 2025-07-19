@@ -16,6 +16,8 @@
  * at the top of the source tree.
  */
 
+#include <sys/stat.h>
+
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/evp.h>
@@ -30,6 +32,8 @@
 #include "crypto_utils.h"
 
 #include "asterisk.h"
+#include "asterisk/cli.h"
+#include "asterisk/file.h"
 #include "asterisk/logger.h"
 #include "asterisk/module.h"
 #include "asterisk/stringfields.h"
@@ -158,10 +162,10 @@ EVP_PKEY *crypto_load_privkey_from_file(const char *filename)
 	return key;
 }
 
-X509 *crypto_load_cert_from_file(const char *filename)
+X509_CRL *crypto_load_crl_from_file(const char *filename)
 {
 	FILE *fp;
-	X509 *cert = NULL;
+	X509_CRL *crl = NULL;
 
 	if (ast_strlen_zero(filename)) {
 		ast_log(LOG_ERROR, "filename was null or empty\n");
@@ -174,18 +178,96 @@ X509 *crypto_load_cert_from_file(const char *filename)
 		return NULL;
 	}
 
-	cert = PEM_read_X509(fp, &cert, NULL, NULL);
+	crl = PEM_read_X509_CRL(fp, &crl, NULL, NULL);
 	fclose(fp);
-	if (!cert) {
-		crypto_log_openssl(LOG_ERROR, "Failed to create cert from %s\n", filename);
+	if (!crl) {
+		crypto_log_openssl(LOG_ERROR, "Failed to create CRL from %s\n", filename);
 	}
-	return cert;
+	return crl;
 }
 
-X509 *crypto_load_cert_from_memory(const char *buffer, size_t size)
+#define debug_cert_chain(level, cert_chain) \
+({ \
+	int i; \
+	char subj[1024]; \
+	if (cert_chain && sk_X509_num(cert_chain) > 0) { \
+		for (i = 0; i < sk_X509_num(cert_chain); i++) { \
+			X509 *cert = sk_X509_value(cert_chain, i); \
+			subj[0] = '\0'; \
+			X509_NAME_oneline(X509_get_subject_name(cert), subj, 1024); \
+			ast_debug(level, "Chain cert %d: '%s'\n", i, subj); \
+		} \
+	} \
+})
+
+X509 *crypto_load_cert_chain_from_file(const char *filename, STACK_OF(X509) **cert_chain)
+{
+	FILE *fp;
+	X509 *end_cert = NULL;
+
+	if (ast_strlen_zero(filename)) {
+		ast_log(LOG_ERROR, "filename was null or empty\n");
+		return NULL;
+	}
+
+	fp = fopen(filename, "r");
+	if (!fp) {
+		ast_log(LOG_ERROR, "Failed to open %s: %s\n", filename, strerror(errno));
+		return NULL;
+	}
+
+	end_cert = PEM_read_X509(fp, &end_cert, NULL, NULL);
+	if (!end_cert) {
+		crypto_log_openssl(LOG_ERROR, "Failed to create end_cert from %s\n", filename);
+		fclose(fp);
+		return NULL;
+	}
+
+	/*
+	 * If the caller provided a stack, we will read the chain certs
+	 * (if any) into it.
+	 */
+	if (cert_chain) {
+		X509 *chain_cert = NULL;
+
+		*cert_chain = sk_X509_new_null();
+		while ((chain_cert = PEM_read_X509(fp, &chain_cert, NULL, NULL)) != NULL) {
+			if (sk_X509_push(*cert_chain, chain_cert) <= 0) {
+				crypto_log_openssl(LOG_ERROR, "Failed to add chain cert from %s to list\n",
+					filename);
+				fclose(fp);
+				X509_free(end_cert);
+				sk_X509_pop_free(*cert_chain, X509_free);
+				return NULL;
+			}
+			/* chain_cert needs to be reset to NULL after every call to PEM_read_X509 */
+			chain_cert = NULL;
+		}
+	}
+
+	if (DEBUG_ATLEAST(4)) {
+		char subj[1024];
+
+		X509_NAME_oneline(X509_get_subject_name(end_cert), subj, 1024);
+		ast_debug(4, "Opened end cert '%s' from '%s'\n", subj, filename);
+
+		if (cert_chain && *cert_chain) {
+			debug_cert_chain(4, *cert_chain);
+		} else {
+			ast_debug(4, "No chain certs found in '%s'\n", filename);
+		}
+	}
+
+	fclose(fp);
+
+	return end_cert;
+}
+
+X509 *crypto_load_cert_chain_from_memory(const char *buffer, size_t size,
+	STACK_OF(X509) **cert_chain)
 {
 	RAII_VAR(BIO *, bio, NULL, BIO_free_all);
-	X509 *cert = NULL;
+	X509 *end_cert = NULL;
 
 	if (ast_strlen_zero(buffer) || size <= 0) {
 		ast_log(LOG_ERROR, "buffer was null or empty\n");
@@ -198,11 +280,46 @@ X509 *crypto_load_cert_from_memory(const char *buffer, size_t size)
 		return NULL;
 	}
 
-	cert = PEM_read_bio_X509(bio, NULL, NULL, NULL);
-	if (!cert) {
-		crypto_log_openssl(LOG_ERROR, "Failed to create cert from BIO\n");
+	end_cert = PEM_read_bio_X509(bio, NULL, NULL, NULL);
+	if (!end_cert) {
+		crypto_log_openssl(LOG_ERROR, "Failed to create end_cert from BIO\n");
+		return NULL;
 	}
-	return cert;
+
+	/*
+	 * If the caller provided a stack, we will read the chain certs
+	 * (if any) into it.
+	 */
+	if (cert_chain) {
+		X509 *chain_cert = NULL;
+
+		*cert_chain = sk_X509_new_null();
+		while ((chain_cert = PEM_read_bio_X509(bio, &chain_cert, NULL, NULL)) != NULL) {
+			if (sk_X509_push(*cert_chain, chain_cert) <= 0) {
+				crypto_log_openssl(LOG_ERROR, "Failed to add chain cert from BIO to list\n");
+				X509_free(end_cert);
+				sk_X509_pop_free(*cert_chain, X509_free);
+				return NULL;
+			}
+			/* chain_cert needs to be reset to NULL after every call to PEM_read_X509 */
+			chain_cert = NULL;
+		}
+	}
+
+	if (DEBUG_ATLEAST(4)) {
+		char subj[1024];
+
+		X509_NAME_oneline(X509_get_subject_name(end_cert), subj, 1024);
+		ast_debug(4, "Opened end cert '%s' from BIO\n", subj);
+
+		if (cert_chain && *cert_chain) {
+			debug_cert_chain(4, *cert_chain);
+		} else {
+			ast_debug(4, "No chain certs found in BIO\n");
+		}
+	}
+
+	return end_cert;
 }
 
 static EVP_PKEY *load_private_key_from_memory(const char *buffer, size_t size)
@@ -303,12 +420,59 @@ int crypto_extract_raw_privkey(EVP_PKEY *key, unsigned char **buffer)
 	return dump_mem_bio(bio, buffer);
 }
 
+/*
+ * Notes on the crypto_cert_store object:
+ *
+ * We've discoverd a few issues with the X509_STORE object in OpenSSL
+ * that requires us to a bit more work to get the desired behavior.
+ *
+ * Basically, although X509_STORE_load_locations() and X509_STORE_load_path()
+ * work file for trusted certs, they refuse to load either CRLs or
+ * untrusted certs from directories, which is needed to support the
+ * crl_path and untrusted_cert_path options.  So we have to brute force
+ * it a bit.  We now use PEM_read_X509() and PEM_read_X509_CRL() to load
+ * the objects from files and then use X509_STORE_add_cert() and
+ * X509_STORE_add_crl() to add them to the store.  This is a bit more
+ * work but it gets the job done.  To load from directories, we
+ * simply use ast_file_read_dirs() with a callback that calls
+ * those functions.  This also fixes an issue where certificates
+ * loaded using ca_path don't show up when displaying the
+ * verification or profile objects from the CLI.
+ *
+ * NOTE: X509_STORE_load_file() could have been used instead of
+ * PEM_read_X509()/PEM_read_X509_CRL() and
+ * X509_STORE_add_cert()/X509_STORE_add_crl() but X509_STORE_load_file()
+ * didn't appear in OpenSSL until version 1.1.1. :(
+ *
+ * Another issue we have is that, while X509_verify_cert() can use
+ * an X509_STORE of CA certificates directly, it can't use X509_STOREs
+ * of untrusted certs or CRLs.  Instead, it needs a stack of X509
+ * objects for untrusted certs and a stack of X509_CRL objects for CRLs.
+ * So we need to extract the untrusted certs and CRLs from their
+ * stores and push them onto the stacks when the configuration is
+ * loaded.  We still use the stores as intermediaries because they
+ * make it easy to load the certs and CRLs from files and directories
+ * and they handle freeing the objects when the store is freed.
+ */
+
 static void crypto_cert_store_destructor(void *obj)
 {
 	struct crypto_cert_store *store = obj;
 
-	if (store->store) {
-		X509_STORE_free(store->store);
+	if (store->certs) {
+		X509_STORE_free(store->certs);
+	}
+	if (store->untrusted) {
+		X509_STORE_free(store->untrusted);
+	}
+	if (store->untrusted_stack) {
+		sk_X509_free(store->untrusted_stack);
+	}
+	if (store->crls) {
+		X509_STORE_free(store->crls);
+	}
+	if (store->crl_stack) {
+		sk_X509_CRL_free(store->crl_stack);
 	}
 }
 
@@ -319,10 +483,36 @@ struct crypto_cert_store *crypto_create_cert_store(void)
 		ast_log(LOG_ERROR, "Failed to create crypto_cert_store\n");
 		return NULL;
 	}
-	store->store = X509_STORE_new();
 
-	if (!store->store) {
+	store->certs = X509_STORE_new();
+	if (!store->certs) {
 		crypto_log_openssl(LOG_ERROR, "Failed to create X509_STORE\n");
+		ao2_ref(store, -1);
+		return NULL;
+	}
+
+	store->untrusted = X509_STORE_new();
+	if (!store->untrusted) {
+		crypto_log_openssl(LOG_ERROR, "Failed to create untrusted X509_STORE\n");
+		ao2_ref(store, -1);
+		return NULL;
+	}
+	store->untrusted_stack = sk_X509_new_null();
+	if (!store->untrusted_stack) {
+		crypto_log_openssl(LOG_ERROR, "Failed to create untrusted stack\n");
+		ao2_ref(store, -1);
+		return NULL;
+	}
+
+	store->crls = X509_STORE_new();
+	if (!store->crls) {
+		crypto_log_openssl(LOG_ERROR, "Failed to create CRL X509_STORE\n");
+		ao2_ref(store, -1);
+		return NULL;
+	}
+	store->crl_stack = sk_X509_CRL_new_null();
+	if (!store->crl_stack) {
+		crypto_log_openssl(LOG_ERROR, "Failed to create CRL stack\n");
 		ao2_ref(store, -1);
 		return NULL;
 	}
@@ -330,28 +520,232 @@ struct crypto_cert_store *crypto_create_cert_store(void)
 	return store;
 }
 
+static int crypto_load_store_from_cert_file(X509_STORE *store, const char *file)
+{
+	X509 *cert;
+	int rc = 0;
+
+	if (ast_strlen_zero(file)) {
+		ast_log(LOG_ERROR, "file was null or empty\n");
+		return -1;
+	}
+
+	cert = crypto_load_cert_chain_from_file(file, NULL);
+	if (!cert) {
+		return -1;
+	}
+	rc = X509_STORE_add_cert(store, cert);
+	X509_free(cert);
+	if (!rc) {
+		crypto_log_openssl(LOG_ERROR, "Failed to load store from file '%s'\n", file);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int crypto_load_store_from_crl_file(X509_STORE *store, const char *file)
+{
+	X509_CRL *crl;
+	int rc = 0;
+
+	if (ast_strlen_zero(file)) {
+		ast_log(LOG_ERROR, "file was null or empty\n");
+		return -1;
+	}
+
+	crl = crypto_load_crl_from_file(file);
+	if (!crl) {
+		return -1;
+	}
+	rc = X509_STORE_add_crl(store, crl);
+	X509_CRL_free(crl);
+	if (!rc) {
+		crypto_log_openssl(LOG_ERROR, "Failed to load store from file '%s'\n", file);
+		return -1;
+	}
+
+	return 0;
+}
+
+struct pem_file_cb_data {
+	X509_STORE *store;
+	int is_crl;
+};
+
+static int pem_file_cb(const char *dir_name, const char *filename, void *obj)
+{
+	struct pem_file_cb_data* data = obj;
+	char *filename_merged = NULL;
+	struct stat statbuf;
+	int rc = 0;
+
+	if (ast_asprintf(&filename_merged, "%s/%s", dir_name, filename) < 0) {
+		return -1;
+	}
+
+	if (lstat(filename_merged, &statbuf)) {
+		printf("Error reading path stats - %s: %s\n",
+					filename_merged, strerror(errno));
+		ast_free(filename_merged);
+		return -1;
+	}
+
+	/* We only want the symlinks from the directory */
+	if (!S_ISLNK(statbuf.st_mode)) {
+		ast_free(filename_merged);
+		return 0;
+	}
+
+	if (data->is_crl) {
+		rc = crypto_load_store_from_crl_file(data->store, filename_merged);
+	} else {
+		rc = crypto_load_store_from_cert_file(data->store, filename_merged);
+	}
+
+	ast_free(filename_merged);
+	return rc;
+}
+
+static int _crypto_load_cert_store(X509_STORE *store, const char *file, const char *path)
+{
+	int rc = 0;
+
+	if (!ast_strlen_zero(file)) {
+		rc = crypto_load_store_from_cert_file(store, file);
+		if (rc != 0) {
+			return -1;
+		}
+	}
+
+	if (!ast_strlen_zero(path)) {
+		struct pem_file_cb_data data = { .store = store, .is_crl = 0 };
+		if (ast_file_read_dirs(path, pem_file_cb, &data, 0)) {
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+static int _crypto_load_crl_store(X509_STORE *store, const char *file, const char *path)
+{
+	int rc = 0;
+
+	if (!ast_strlen_zero(file)) {
+		rc = crypto_load_store_from_crl_file(store, file);
+		if (rc != 0) {
+			return -1;
+		}
+	}
+
+	if (!ast_strlen_zero(path)) {
+		struct pem_file_cb_data data = { .store = store, .is_crl = 1 };
+		if (ast_file_read_dirs(path, pem_file_cb, &data, 0)) {
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
 int crypto_load_cert_store(struct crypto_cert_store *store, const char *file,
 	const char *path)
 {
 	if (ast_strlen_zero(file) && ast_strlen_zero(path)) {
-		ast_log(LOG_ERROR, "Both file and path can't be NULL");
+		ast_log(LOG_ERROR, "Both file and path can't be NULL\n");
 		return -1;
 	}
 
-	if (!store || !store->store) {
-		ast_log(LOG_ERROR, "store is NULL");
+	if (!store || !store->certs) {
+		ast_log(LOG_ERROR, "store or store->certs is NULL\n");
 		return -1;
+	}
+
+	return _crypto_load_cert_store(store->certs, file, path);
+}
+
+int crypto_load_untrusted_cert_store(struct crypto_cert_store *store, const char *file,
+	const char *path)
+{
+	int rc = 0;
+	STACK_OF(X509_OBJECT) *objs = NULL;
+	int count = 0;
+	int i = 0;
+
+	if (ast_strlen_zero(file) && ast_strlen_zero(path)) {
+		ast_log(LOG_ERROR, "Both file and path can't be NULL\n");
+		return -1;
+	}
+
+	if (!store || !store->untrusted || !store->untrusted_stack) {
+		ast_log(LOG_ERROR, "store wasn't initialized properly\n");
+		return -1;
+	}
+
+	rc = _crypto_load_cert_store(store->untrusted, file, path);
+	if (rc != 0) {
+		return rc;
 	}
 
 	/*
-	 * If the file or path are empty strings, we need to pass NULL
-	 * so openssl ignores it otherwise it'll try to open a file or
-	 * path named ''.
+	 * We need to extract the certs from the store and push them onto the
+	 * untrusted stack.  This is because the verification context needs
+	 * a stack of untrusted certs and not the store.
+	 * The store holds the references to the certs so we can't
+	 * free it.
 	 */
-	if (!X509_STORE_load_locations(store->store, S_OR(file, NULL), S_OR(path, NULL))) {
-		crypto_log_openssl(LOG_ERROR, "Failed to load store from file '%s' or path '%s'\n",
-			S_OR(file, "N/A"), S_OR(path, "N/A"));
+	objs = X509_STORE_get0_objects(store->untrusted);
+	count = sk_X509_OBJECT_num(objs);
+	for (i = 0; i < count ; i++) {
+		X509_OBJECT *o = sk_X509_OBJECT_value(objs, i);
+		if (X509_OBJECT_get_type(o) == X509_LU_X509) {
+			X509 *c = X509_OBJECT_get0_X509(o);
+			sk_X509_push(store->untrusted_stack, c);
+		}
+	}
+
+	return 0;
+}
+
+int crypto_load_crl_store(struct crypto_cert_store *store, const char *file,
+	const char *path)
+{
+	int rc = 0;
+	STACK_OF(X509_OBJECT) *objs = NULL;
+	int count = 0;
+	int i = 0;
+
+	if (ast_strlen_zero(file) && ast_strlen_zero(path)) {
+		ast_log(LOG_ERROR, "Both file and path can't be NULL\n");
 		return -1;
+	}
+
+	if (!store || !store->untrusted || !store->untrusted_stack) {
+		ast_log(LOG_ERROR, "store wasn't initialized properly\n");
+		return -1;
+	}
+
+	rc = _crypto_load_crl_store(store->crls, file, path);
+	if (rc != 0) {
+		return rc;
+	}
+
+	/*
+	 * We need to extract the CRLs from the store and push them onto the
+	 * crl stack.  This is because the verification context needs
+	 * a stack of CRLs and not the store.
+	 * The store holds the references to the CRLs so we can't
+	 * free it.
+	 */
+	objs = X509_STORE_get0_objects(store->crls);
+	count = sk_X509_OBJECT_num(objs);
+	for (i = 0; i < count ; i++) {
+		X509_OBJECT *o = sk_X509_OBJECT_value(objs, i);
+		if (X509_OBJECT_get_type(o) == X509_LU_CRL) {
+			X509_CRL *c = X509_OBJECT_get0_X509_CRL(o);
+			sk_X509_CRL_push(store->crl_stack, c);
+		}
 	}
 
 	return 0;
@@ -360,20 +754,53 @@ int crypto_load_cert_store(struct crypto_cert_store *store, const char *file,
 int crypto_show_cli_store(struct crypto_cert_store *store, int fd)
 {
 #if (OPENSSL_VERSION_NUMBER >= 0x10100000L)
-	STACK_OF(X509_OBJECT) *certs = NULL;
+	STACK_OF(X509_OBJECT) *objs = NULL;
 	int count = 0;
+	int untrusted_count = 0;
+	int crl_count = 0;
 	int i = 0;
 	char subj[1024];
 
-	certs = X509_STORE_get0_objects(store->store);
-	count = sk_X509_OBJECT_num(certs);
+	/*
+	 * The CA certificates are stored in the certs store.
+	 */
+	objs = X509_STORE_get0_objects(store->certs);
+	count = sk_X509_OBJECT_num(objs);
+
 	for (i = 0; i < count ; i++) {
-		X509_OBJECT *o = sk_X509_OBJECT_value(certs, i);
-		X509 *c = X509_OBJECT_get0_X509(o);
-		X509_NAME_oneline(X509_get_subject_name(c), subj, 1024);
-		ast_cli(fd, "%s\n", subj);
+		X509_OBJECT *o = sk_X509_OBJECT_value(objs, i);
+		if (X509_OBJECT_get_type(o) == X509_LU_X509) {
+			X509 *c = X509_OBJECT_get0_X509(o);
+			X509_NAME_oneline(X509_get_subject_name(c), subj, 1024);
+			ast_cli(fd, "Cert: %s\n", subj);
+		} else {
+			ast_log(LOG_ERROR, "CRLs are not allowed in the CA cert store\n");
+		}
 	}
-	return count;
+
+	/*
+	 * Although the untrusted certs are stored in the untrusted store,
+	 * we already have the stack of certificates so we can just
+	 * list them directly.
+	 */
+	untrusted_count = sk_X509_num(store->untrusted_stack);
+	for (i = 0; i < untrusted_count ; i++) {
+		X509 *c = sk_X509_value(store->untrusted_stack, i);
+		X509_NAME_oneline(X509_get_subject_name(c), subj, 1024);
+		ast_cli(fd, "Untrusted: %s\n", subj);
+	}
+
+	/*
+	 * Same for the CRLs.
+	 */
+	crl_count = sk_X509_CRL_num(store->crl_stack);
+	for (i = 0; i < crl_count ; i++) {
+		X509_CRL *crl = sk_X509_CRL_value(store->crl_stack, i);
+		X509_NAME_oneline(X509_CRL_get_issuer(crl), subj, 1024);
+		ast_cli(fd, "CRL: %s\n", subj);
+	}
+
+	return count + untrusted_count + crl_count;
 #else
 	ast_cli(fd, "This command is not supported until OpenSSL 1.1.0\n");
 	return 0;
@@ -399,9 +826,11 @@ int crypto_is_cert_time_valid(X509*cert, time_t reftime)
 		X509_cmp_time(notafter, &reftime) > 0);
 }
 
-int crypto_is_cert_trusted(struct crypto_cert_store *store, X509 *cert, const char **err_msg)
+int crypto_is_cert_trusted(struct crypto_cert_store *store, X509 *cert,
+	STACK_OF(X509) *cert_chain, const char **err_msg)
 {
 	X509_STORE_CTX *verify_ctx = NULL;
+	RAII_VAR(STACK_OF(X509) *, untrusted_stack, NULL, sk_X509_free);
 	int rc = 0;
 
 	if (!(verify_ctx = X509_STORE_CTX_new())) {
@@ -409,18 +838,58 @@ int crypto_is_cert_trusted(struct crypto_cert_store *store, X509 *cert, const ch
 		return 0;
 	}
 
-	if (X509_STORE_CTX_init(verify_ctx, store->store, cert, NULL) != 1) {
+	if (cert_chain && sk_X509_num(cert_chain) > 0) {
+		int untrusted_count = store->untrusted_stack ? sk_X509_num(store->untrusted_stack) : 0;
+		int i = 0;
+
+		untrusted_stack = sk_X509_dup(cert_chain);
+		if (!untrusted_stack) {
+			crypto_log_openssl(LOG_ERROR, "Unable to duplicate untrusted stack\n");
+			X509_STORE_CTX_free(verify_ctx);
+			return 0;
+		}
+		/*
+		 * If store->untrusted_stack was NULL for some reason then
+		 * untrusted_count will be 0 so the loop will never run.
+		 */
+		for (i = 0; i < untrusted_count; i++) {
+			X509 *c = sk_X509_value(store->untrusted_stack, i);
+			if (sk_X509_push(untrusted_stack, c) <= 0) {
+				crypto_log_openssl(LOG_ERROR, "Unable to push untrusted cert onto stack\n");
+				sk_X509_free(untrusted_stack);
+				X509_STORE_CTX_free(verify_ctx);
+				return 0;
+			}
+		}
+	/*
+	 * store->untrusted_stack should always be allocated even if empty
+	 * but we'll make sure.
+	 */
+	} else if (store->untrusted_stack){
+		/* This is a dead simple shallow clone */
+		ast_debug(4, "cert_chain had no certs\n");
+		untrusted_stack = sk_X509_dup(store->untrusted_stack);
+		if (!untrusted_stack) {
+			crypto_log_openssl(LOG_ERROR, "Unable to duplicate untrusted stack\n");
+			X509_STORE_CTX_free(verify_ctx);
+			return 0;
+		}
+	}
+
+	if (X509_STORE_CTX_init(verify_ctx, store->certs, cert, untrusted_stack) != 1) {
 		X509_STORE_CTX_cleanup(verify_ctx);
 		X509_STORE_CTX_free(verify_ctx);
 		crypto_log_openssl(LOG_ERROR, "Unable to initialize verify_ctx\n");
 		return 0;
 	}
+	X509_STORE_CTX_set0_crls(verify_ctx, store->crl_stack);
 
 	rc = X509_verify_cert(verify_ctx);
 	if (rc != 1 && err_msg != NULL) {
 		int err = X509_STORE_CTX_get_error(verify_ctx);
 		*err_msg = X509_verify_cert_error_string(err);
 	}
+
 	X509_STORE_CTX_cleanup(verify_ctx);
 	X509_STORE_CTX_free(verify_ctx);
 

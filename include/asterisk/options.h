@@ -32,6 +32,7 @@ extern "C" {
 #define AST_CACHE_DIR_LEN 	512
 #define AST_FILENAME_MAX	80
 #define AST_CHANNEL_NAME    80  /*!< Max length of an ast_channel name */
+#define AST_CHANNEL_STORAGE_BACKEND_NAME_LEN  80  /*!< Max length of storage backend name */
 
 
 /*! \ingroup main_options */
@@ -207,6 +208,8 @@ extern int ast_language_is_prefix;
 
 extern int ast_option_rtpusedynamic;
 extern unsigned int ast_option_rtpptdynamic;
+
+extern int ast_option_disable_remote_console_shell;
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

@@ -39,6 +39,9 @@
 
 /*** DOCUMENTATION
 	<function name="FRAME_TRACE" language="en_US">
+		<since>
+			<version>10.0.0</version>
+		</since>
 		<synopsis>
 			View internal ast_frames as they are read and written on a channel.
 		</synopsis>
@@ -367,6 +370,9 @@ static void print_frame(struct ast_frame *frame)
 			break;
 		case AST_CONTROL_STREAM_FORWARD:
 			ast_verbose("SubClass: STREAM_FORWARD\n");
+			break;
+		case AST_CONTROL_PLAYBACK_BEGIN:
+			ast_verbose("SubClass: PLAYBACK_BEGIN\n");
 			break;
 		case AST_CONTROL_RECORD_CANCEL:
 			ast_verbose("SubClass: RECORD_CANCEL\n");

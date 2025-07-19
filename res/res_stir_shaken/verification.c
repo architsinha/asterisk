@@ -19,7 +19,6 @@
 #include <sys/stat.h>
 
 #include <jwt.h>
-#include <jansson.h>
 #include <regex.h>
 
 #include "asterisk.h"
@@ -85,6 +84,7 @@ static const char *vs_rc_map[] = {
 	[AST_STIR_SHAKEN_VS_NO_DEST_TN] = "missing_dest_tn",
 	[AST_STIR_SHAKEN_VS_INVALID_HEADER] = "invalid_header",
 	[AST_STIR_SHAKEN_VS_INVALID_GRANT] = "invalid_grant",
+	[AST_STIR_SHAKEN_VS_INVALID_OR_NO_CID] = "invalid_or_no_callerid",
 };
 
 const char *vs_response_code_to_str(
@@ -345,7 +345,8 @@ static enum ast_stir_shaken_vs_response_code check_cert(
 	}
 
 	ast_trace(3,"%s: Checking ctx against CA ctx\n", ctx->tag);
-	res = crypto_is_cert_trusted(ctx->eprofile->vcfg_common.tcs, ctx->xcert, &err_msg);
+	res = crypto_is_cert_trusted(ctx->eprofile->vcfg_common.tcs, ctx->xcert,
+		ctx->cert_chain, &err_msg);
 	if (!res) {
 		SCOPE_EXIT_LOG_RTN_VALUE(AST_STIR_SHAKEN_VS_CERT_NOT_TRUSTED,
 			LOG_ERROR, "%s: Cert '%s' not trusted: %s\n",
@@ -429,8 +430,8 @@ static enum ast_stir_shaken_vs_response_code retrieve_cert_from_url(
 			ctx->tag, ctx->public_url);
 	}
 
-	ctx->xcert = crypto_load_cert_from_memory(write_data->stream_buffer,
-		write_data->stream_bytes_downloaded);
+	ctx->xcert = crypto_load_cert_chain_from_memory(write_data->stream_buffer,
+		write_data->stream_bytes_downloaded, &ctx->cert_chain);
 	if (!ctx->xcert) {
 		SCOPE_EXIT_LOG_RTN_VALUE(AST_STIR_SHAKEN_VS_CERT_CONTENTS_INVALID,
 			LOG_ERROR, "%s: Cert '%s' was not parseable as an X509 certificate\n",
@@ -524,7 +525,7 @@ static enum ast_stir_shaken_vs_response_code
 			ctx->tag, ctx->filename, ctx->public_url);
 	}
 
-	ctx->xcert = crypto_load_cert_from_file(ctx->filename);
+	ctx->xcert = crypto_load_cert_chain_from_file(ctx->filename, &ctx->cert_chain);
 	if (!ctx->xcert) {
 		cleanup_cert_from_astdb_and_fs(ctx);
 		SCOPE_EXIT_RTN_VALUE(AST_STIR_SHAKEN_VS_CERT_CONTENTS_INVALID,
@@ -630,6 +631,12 @@ int ast_stir_shaken_vs_get_use_rfc9410_responses(
 	return ctx->eprofile->vcfg_common.use_rfc9410_responses;
 }
 
+const char *ast_stir_shaken_vs_get_caller_id(
+		struct ast_stir_shaken_vs_ctx *ctx)
+{
+	return ctx->caller_id;
+}
+
 void ast_stir_shaken_vs_ctx_set_response_code(
 	struct ast_stir_shaken_vs_ctx *ctx,
 	enum ast_stir_shaken_vs_response_code vs_rc)
@@ -645,6 +652,7 @@ static void ctx_destructor(void *obj)
 	ast_free(ctx->raw_key);
 	ast_string_field_free_memory(ctx);
 	X509_free(ctx->xcert);
+	sk_X509_free(ctx->cert_chain);
 }
 
 enum ast_stir_shaken_vs_response_code
@@ -660,25 +668,15 @@ enum ast_stir_shaken_vs_response_code
 	const char *t = S_OR(tag, S_COR(chan, ast_channel_name(chan), ""));
 	SCOPE_ENTER(3, "%s: Enter\n", t);
 
-	if (ast_strlen_zero(tag)) {
-		SCOPE_EXIT_LOG_RTN_VALUE(AST_STIR_SHAKEN_VS_INVALID_ARGUMENTS,
-			LOG_ERROR, "%s: Must provide tag\n", t);
-	}
-
-	if (ast_strlen_zero(canon_caller_id)) {
-		SCOPE_EXIT_LOG_RTN_VALUE(AST_STIR_SHAKEN_VS_INVALID_ARGUMENTS,
-		LOG_ERROR, "%s: Must provide caller_id\n", t);
+	vs = vs_get_cfg();
+	if (vs->global_disable) {
+		SCOPE_EXIT_RTN_VALUE(AST_STIR_SHAKEN_VS_DISABLED,
+			"%s: Globally disabled\n", t);
 	}
 
 	if (ast_strlen_zero(profile_name)) {
 		SCOPE_EXIT_RTN_VALUE(AST_STIR_SHAKEN_VS_DISABLED,
 			"%s: Disabled due to missing profile name\n", t);
-	}
-
-	vs = vs_get_cfg();
-	if (vs->global_disable) {
-		SCOPE_EXIT_RTN_VALUE(AST_STIR_SHAKEN_VS_DISABLED,
-			"%s: Globally disabled\n", t);
 	}
 
 	profile = eprofile_get_cfg(profile_name);
@@ -690,7 +688,12 @@ enum ast_stir_shaken_vs_response_code
 
 	if (!PROFILE_ALLOW_VERIFY(profile)) {
 		SCOPE_EXIT_RTN_VALUE(AST_STIR_SHAKEN_VS_DISABLED,
-			"%s: Disabled by profile\n", t);
+			"%s: Disabled by profile '%s'\n", t, profile_name);
+	}
+
+	if (ast_strlen_zero(tag)) {
+		SCOPE_EXIT_LOG_RTN_VALUE(AST_STIR_SHAKEN_VS_INVALID_ARGUMENTS,
+			LOG_ERROR, "%s: Must provide tag\n", t);
 	}
 
 	ctx = ao2_alloc_options(sizeof(*ctx), ctx_destructor,
@@ -731,6 +734,15 @@ static enum ast_stir_shaken_vs_response_code check_date_header(
 	int64_t time_diff;
 	SCOPE_ENTER(3, "%s: Checking date header: '%s'\n",
 		ctx->tag, ctx->date_hdr);
+
+	if (ast_strlen_zero(ctx->date_hdr)) {
+		if (ctx->eprofile->vcfg_common.ignore_sip_date_header) {
+			SCOPE_EXIT_RTN_VALUE(AST_STIR_SHAKEN_VS_SUCCESS,
+				"%s: ignore_sip_date_header set\n", ctx->tag);
+		}
+		SCOPE_EXIT_LOG_RTN_VALUE(AST_STIR_SHAKEN_VS_NO_DATE_HDR,
+			LOG_ERROR, "%s: No date header provided\n", ctx->tag);
+	}
 
 	if (!(remainder = ast_strptime(ctx->date_hdr, "%a, %d %b %Y %T", &date_hdr_tm))) {
 		SCOPE_EXIT_LOG_RTN_VALUE(AST_STIR_SHAKEN_VS_DATE_HDR_PARSE_FAILURE,
@@ -852,7 +864,7 @@ static int check_x5u_url(struct ast_stir_shaken_vs_ctx * ctx,
 		}
 		if (!ast_strlen_zero(port)) {
 			if (!ast_strings_equal(port, "443")
-				|| !ast_strings_equal(port, "8443")) {
+				&& !ast_strings_equal(port, "8443")) {
 				DUMP_X5U_MATCH();
 				SCOPE_EXIT_LOG_RTN_VALUE(AST_STIR_SHAKEN_VS_INVALID_OR_NO_X5U, LOG_ERROR,
 					"%s: x5u '%s': port '%s' not port 443 or 8443\n",
@@ -939,8 +951,8 @@ enum ast_stir_shaken_vs_response_code
 			"%s: No x5u in Identity header\n", ctx->tag);
 	}
 
-	rc = check_x5u_url(ctx, x5u);
-	if (rc != AST_STIR_SHAKEN_VS_SUCCESS) {
+	vs_rc = check_x5u_url(ctx, x5u);
+	if (vs_rc != AST_STIR_SHAKEN_VS_SUCCESS) {
 		SCOPE_EXIT_RTN_VALUE(vs_rc,
 			"%s: x5u URL verification failed\n", ctx->tag);
 	}
@@ -956,8 +968,9 @@ enum ast_stir_shaken_vs_response_code
 		SCOPE_EXIT_LOG_RTN_VALUE(AST_STIR_SHAKEN_VS_NO_IAT, LOG_ERROR,
 			"%s: No 'iat' in Identity header\n", ctx->tag);
 	}
-	ast_trace(1, "date_hdr: %zu  iat: %zu  diff: %zu\n",
-		ctx->date_hdr_time, iat, ctx->date_hdr_time - iat);
+	ast_trace(1, "date_hdr: %zu  iat: %zu\n",
+		ctx->date_hdr_time, iat);
+
 	if (iat + ctx->eprofile->vcfg_common.max_iat_age < now_s) {
 		SCOPE_EXIT_RTN_VALUE(AST_STIR_SHAKEN_VS_IAT_EXPIRED,
 			"%s: iat %ld older than %u seconds\n", ctx->tag,

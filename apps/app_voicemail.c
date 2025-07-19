@@ -111,6 +111,9 @@
 
 /*** DOCUMENTATION
 	<application name="VoiceMail" language="en_US">
+		<since>
+			<version>0.1.0</version>
+		</since>
 		<synopsis>
 			Leave a Voicemail message.
 		</synopsis>
@@ -200,6 +203,9 @@
 		</see-also>
 	</application>
 	<application name="VoiceMailMain" language="en_US">
+		<since>
+			<version>0.1.0</version>
+		</since>
 		<synopsis>
 			Check Voicemail messages.
 		</synopsis>
@@ -265,6 +271,9 @@
 		</see-also>
 	</application>
 	<application name="VMAuthenticate" language="en_US">
+		<since>
+			<version>1.2.0</version>
+		</since>
 		<synopsis>
 			Authenticate with Voicemail passwords.
 		</synopsis>
@@ -297,6 +306,9 @@
 		</description>
 	</application>
 	<application name="VoiceMailPlayMsg" language="en_US">
+		<since>
+			<version>11.0.0</version>
+		</since>
 		<synopsis>
 			Play a single voice mail msg from a mailbox by msg id.
 		</synopsis>
@@ -321,6 +333,9 @@
 		</description>
 	</application>
 	<application name="VMSayName" language="en_US">
+		<since>
+			<version>1.8.0</version>
+		</since>
 		<synopsis>
 			Play the name of a voicemail user
 		</synopsis>
@@ -339,6 +354,9 @@
 		</description>
 	</application>
 	<function name="VM_INFO" language="en_US">
+		<since>
+			<version>11.0.0</version>
+		</since>
 		<synopsis>
 			Returns the selected attribute from a mailbox.
 		</synopsis>
@@ -392,6 +410,9 @@
 		</description>
 	</function>
 	<manager name="VoicemailUsersList" language="en_US">
+		<since>
+			<version>1.6.0</version>
+		</since>
 		<synopsis>
 			List All Voicemail User Information.
 		</synopsis>
@@ -402,6 +423,9 @@
 		</description>
 	</manager>
 	<manager name="VoicemailUserStatus" language="en_US">
+		<since>
+			<version>16.0.0</version>
+		</since>
 		<synopsis>
 			Show the status of given voicemail user's info.
 		</synopsis>
@@ -419,6 +443,9 @@
 		</description>
 	</manager>
 	<manager name="VoicemailRefresh" language="en_US">
+		<since>
+			<version>12.0.0</version>
+		</since>
 		<synopsis>
 			Tell Asterisk to poll mailboxes for a change
 		</synopsis>
@@ -446,6 +473,10 @@
 		</description>
 	</manager>
 	<manager name="VoicemailBoxSummary" language="en_US">
+		<since>
+			<version>20.5.0</version>
+			<version>18.20.0</version>
+		</since>
 		<synopsis>
 			Show the mailbox contents of given voicemail user.
 		</synopsis>
@@ -463,6 +494,10 @@
 		</description>
 	</manager>
 	<manager name="VoicemailMove" language="en_US">
+		<since>
+			<version>20.5.0</version>
+			<version>18.20.0</version>
+		</since>
 		<synopsis>
 			Move Voicemail between mailbox folders of given user.
 		</synopsis>
@@ -489,6 +524,10 @@
 		</description>
 	</manager>
 	<manager name="VoicemailRemove" language="en_US">
+		<since>
+			<version>20.5.0</version>
+			<version>18.20.0</version>
+		</since>
 		<synopsis>
 			Remove Voicemail from mailbox folder.
 		</synopsis>
@@ -512,6 +551,10 @@
 		</description>
 	</manager>
 	<manager name="VoicemailForward" language="en_US">
+		<since>
+			<version>20.5.0</version>
+			<version>18.20.0</version>
+		</since>
 		<synopsis>
 			Forward Voicemail from one mailbox folder to another between given users.
 		</synopsis>
@@ -548,6 +591,11 @@
 	</manager>
 	<managerEvent language="en_US" name="VoicemailPasswordChange">
 		<managerEventInstance class="EVENT_FLAG_USER">
+			<since>
+				<version>18.21.0</version>
+				<version>20.6.0</version>
+				<version>21.1.0</version>
+			</since>
 			<synopsis>Raised in response to a mailbox password change.</synopsis>
 			<syntax>
 				<parameter name="Context">
@@ -734,7 +782,6 @@ enum vm_option_args {
 enum vm_passwordlocation {
 	OPT_PWLOC_VOICEMAILCONF = 0,
 	OPT_PWLOC_SPOOLDIR      = 1,
-	OPT_PWLOC_USERSCONF     = 2,
 };
 
 AST_APP_OPTIONS(vm_app_options, {
@@ -786,9 +833,9 @@ static int load_config_force(int reload, int force);
 
 static int load_config(int reload);
 #ifdef TEST_FRAMEWORK
-static int load_config_from_memory(int reload, struct ast_config *cfg, struct ast_config *ucfg);
+static int load_config_from_memory(int reload, struct ast_config *cfg);
 #endif
-static int actual_load_config(int reload, struct ast_config *cfg, struct ast_config *ucfg);
+static int actual_load_config(int reload, struct ast_config *cfg);
 
 /*! \page vmlang Voicemail Language Syntaxes Supported
 
@@ -1037,8 +1084,6 @@ static int pwdchange = PWDCHANGE_INTERNAL;
 # define tdesc "Comedian Mail (Voicemail System)"
 # endif
 #endif
-
-static char userscontext[AST_MAX_EXTENSION] = "default";
 
 static char *addesc = "Comedian Mail";
 
@@ -1750,7 +1795,7 @@ static int check_password(struct ast_vm_user *vmu, char *password)
 }
 
 /*!
- * \brief Performs a change of the voicemail passowrd in the realtime engine.
+ * \brief Performs a change of the voicemail password in the realtime engine.
  * \param vmu The voicemail user to change the password for.
  * \param password The new value to be set to the password for this user.
  *
@@ -2050,7 +2095,6 @@ static inline int valid_config(const struct ast_config *cfg)
 static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 {
 	struct ast_config   *cfg = NULL;
-	struct ast_variable *var = NULL;
 	struct ast_category *cat = NULL;
 	char *category = NULL;
 	const char *tmp = NULL;
@@ -2115,48 +2159,7 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 
 			ast_config_destroy(cfg);
 		}
-		/* Fall-through */
-	case OPT_PWLOC_USERSCONF:
-		/* check users.conf and update the password stored for the mailbox */
-		/* if no vmsecret entry exists create one. */
-		if ((cfg = ast_config_load("users.conf", config_flags)) && valid_config(cfg)) {
-			ast_debug(4, "we are looking for %s\n", vmu->mailbox);
-			for (category = ast_category_browse(cfg, NULL); category; category = ast_category_browse(cfg, category)) {
-				ast_debug(4, "users.conf: %s\n", category);
-				if (!strcasecmp(category, vmu->mailbox)) {
-					char new[strlen(newpassword) + 1];
-					if (!ast_variable_retrieve(cfg, category, "vmsecret")) {
-						ast_debug(3, "looks like we need to make vmsecret!\n");
-						var = ast_variable_new("vmsecret", newpassword, "");
-					} else {
-						var = NULL;
-					}
-
-					sprintf(new, "%s", newpassword);
-					if (!(cat = ast_category_get(cfg, category, NULL))) {
-						ast_debug(4, "failed to get category!\n");
-						ast_free(var);
-						break;
-					}
-					if (!var) {
-						ast_variable_update(cat, "vmsecret", new, NULL, 0);
-					} else {
-						ast_variable_append(cat, var);
-					}
-					found = 1;
-					break;
-				}
-			}
-			/* save the results and clean things up */
-			if (found) {
-				ast_test_suite_event_notify("PASSWORDCHANGED", "Message: users.conf updated with new password\r\nPasswordSource: users.conf");
-				reset_user_pw(vmu->context, vmu->mailbox, newpassword);
-				ast_copy_string(vmu->password, newpassword, sizeof(vmu->password));
-				ast_config_text_file_save("users.conf", cfg, "app_voicemail");
-			}
-
-			ast_config_destroy(cfg);
-		}
+		break;
 	}
 }
 
@@ -4622,7 +4625,7 @@ static void odbc_delete_message(const char *sdir, int smsg)
  * \param smsg the index of the message to be copied.
  * \param ddir the destination folder to copy the message into.
  * \param dmsg the index to be used for the copied message.
- * \param dmailboxuser The user who owns the mailbox tha contains the destination folder.
+ * \param dmailboxuser The user who owns the mailbox that contains the destination folder.
  * \param dmailboxcontext The context for the destination user.
  *
  * This method is used for the COPY macro when mailboxes are stored in an ODBC back end.
@@ -4917,7 +4920,7 @@ static int odbc_store_message(const char *dir, const char *mailboxuser, const ch
  * \param dmsg The destination message for the message to be renamed.
  *
  * This method is used by the RENAME macro when mailboxes are stored in an ODBC back end.
- * The is usually used to resequence the messages in the mailbox, such as to delete messag index 0, it would be called successively to slide all the other messages down one index.
+ * The is usually used to resequence the messages in the mailbox, such as to delete message index 0, it would be called successively to slide all the other messages down one index.
  * But in theory, because the SQL query performs an update on (dir, msgnum, mailboxuser, mailboxcontext) in the database, it should be possible to have the message relocated to another mailbox or context as well.
  */
 static void odbc_rename_message(char *sdir, int smsg, char *mailboxuser, char *mailboxcontext, char *ddir, int dmsg)
@@ -5296,7 +5299,7 @@ static void prep_email_sub_vars(struct ast_channel *ast, struct ast_vm_user *vmu
 }
 
 /*!
- * \brief Wraps a character sequence in double quotes, escaping occurences of quotes within the string.
+ * \brief Wraps a character sequence in double quotes, escaping occurrences of quotes within the string.
  * \param from The string to work with.
  * \param buf The buffer into which to write the modified quoted string.
  * \param maxlen Always zero, but see \see ast_str
@@ -6033,11 +6036,14 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 		}
 	} else {
 		if (ast_strlen_zero(flag)) {
-			fprintf(p, "Subject: New VM\n\n");
+			fprintf(p, "Subject: New VM" ENDL);
 		} else {
-			fprintf(p, "Subject: New %s VM\n\n", flag);
+			fprintf(p, "Subject: New %s VM" ENDL, flag);
 		}
 	}
+
+	/* End of headers */
+	fputs(ENDL, p);
 
 	if (pagerbody) {
 		struct ast_channel *ast;
@@ -6261,12 +6267,14 @@ static int messagecount(const char *mailbox_id, const char *folder)
 	}
 
 	if (!strcmp(folder, "INBOX")) {
-		gps.sql = ast_alloca(sizeof(MSGCOUNT_SQL_FMT_INBOX) + odbc_table_len + (strlen(VM_SPOOL_DIR) + strlen(context) + strlen(mailbox) * 2));
-		sprintf(gps.sql, MSGCOUNT_SQL_FMT_INBOX, odbc_table, VM_SPOOL_DIR, context, mailbox, VM_SPOOL_DIR, context, mailbox); /* Safe */
+		res = ast_asprintf(&gps.sql, MSGCOUNT_SQL_FMT_INBOX, odbc_table, VM_SPOOL_DIR, context, mailbox, VM_SPOOL_DIR, context, mailbox);
 	} else {
-		gps.sql = ast_alloca(sizeof(MSGCOUNT_SQL_FMT) + odbc_table_len + strlen(VM_SPOOL_DIR) + strlen(context) + strlen(mailbox) + strlen(folder));
-		sprintf(gps.sql, MSGCOUNT_SQL_FMT, odbc_table, VM_SPOOL_DIR, context, mailbox, folder); /* Safe */
+		res = ast_asprintf(&gps.sql, MSGCOUNT_SQL_FMT, odbc_table, VM_SPOOL_DIR, context, mailbox, folder);
 	}
+	if (res <= 0) {
+		SCOPE_EXIT_LOG_RTN_VALUE(0, AST_LOG_WARNING, "Failed to allocate memory for SQL statement for '%s'!\n", odbc_database);
+	}
+	ast_trace(-1, "SQL: %s\n", gps.sql);
 
 	stmt = ast_odbc_prepare_and_execute(obj, generic_prepare, &gps);
 	if (!stmt) {
@@ -6290,6 +6298,7 @@ bail_with_handle:
 
 bail:
 	ast_odbc_release_obj(obj);
+	ast_free(gps.sql);
 	SCOPE_EXIT_RTN_VALUE(nummsgs, "Messages: %d\n", nummsgs);
 }
 #undef MSGCOUNT_SQL_FMT
@@ -6646,7 +6655,7 @@ static void run_externnotify(const char *context, const char *extension, const c
 /*!
  * \brief Variables used for saving a voicemail.
  *
- * This includes the record gain, mode flags, and the exit context of the chanel that was used for leaving the voicemail.
+ * This includes the record gain, mode flags, and the exit context of the channel that was used for leaving the voicemail.
  */
 struct leave_vm_options {
 	unsigned int flags;
@@ -14682,7 +14691,7 @@ static const char *substitute_escapes(const char *value)
 
 static int load_config_force(int reload, int force)
 {
-	struct ast_config *cfg, *ucfg;
+	struct ast_config *cfg;
 	struct ast_flags config_flags = { reload && !force ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 	int res;
 
@@ -14690,15 +14699,8 @@ static int load_config_force(int reload, int force)
 	ast_unload_realtime("voicemail_data");
 
 	if ((cfg = ast_config_load(VOICEMAIL_CONFIG, config_flags)) == CONFIG_STATUS_FILEUNCHANGED) {
-		if ((ucfg = ast_config_load("users.conf", config_flags)) == CONFIG_STATUS_FILEUNCHANGED) {
-			return 0;
-		} else if (ucfg == CONFIG_STATUS_FILEINVALID) {
-			ast_log(LOG_ERROR, "Config file users.conf is in an invalid format.  Avoiding.\n");
-			ucfg = NULL;
-		}
 		ast_clear_flag(&config_flags, CONFIG_FLAG_FILEUNCHANGED);
 		if ((cfg = ast_config_load(VOICEMAIL_CONFIG, config_flags)) == CONFIG_STATUS_FILEINVALID) {
-			ast_config_destroy(ucfg);
 			ast_log(LOG_ERROR, "Config file " VOICEMAIL_CONFIG " is in an invalid format.  Aborting.\n");
 			return 0;
 		}
@@ -14707,16 +14709,11 @@ static int load_config_force(int reload, int force)
 		return 0;
 	} else {
 		ast_clear_flag(&config_flags, CONFIG_FLAG_FILEUNCHANGED);
-		if ((ucfg = ast_config_load("users.conf", config_flags)) == CONFIG_STATUS_FILEINVALID) {
-			ast_log(LOG_ERROR, "Config file users.conf is in an invalid format.  Avoiding.\n");
-			ucfg = NULL;
-		}
 	}
 
-	res = actual_load_config(reload, cfg, ucfg);
+	res = actual_load_config(reload, cfg);
 
 	ast_config_destroy(cfg);
-	ast_config_destroy(ucfg);
 
 	return res;
 }
@@ -14727,11 +14724,11 @@ static int load_config(int reload)
 }
 
 #ifdef TEST_FRAMEWORK
-static int load_config_from_memory(int reload, struct ast_config *cfg, struct ast_config *ucfg)
+static int load_config_from_memory(int reload, struct ast_config *cfg)
 {
 	ast_unload_realtime("voicemail");
 	ast_unload_realtime("voicemail_data");
-	return actual_load_config(reload, cfg, ucfg);
+	return actual_load_config(reload, cfg);
 }
 #endif
 
@@ -14827,15 +14824,12 @@ static void load_users(struct ast_config *cfg)
 	}
 }
 
-static int actual_load_config(int reload, struct ast_config *cfg, struct ast_config *ucfg)
+static int actual_load_config(int reload, struct ast_config *cfg)
 {
-	struct ast_vm_user *current;
-	char *cat;
 	const char *val;
 	char *q, *stringp, *tmp;
 	int x;
 	unsigned int tmpadsi[4];
-	char secretfn[PATH_MAX] = "";
 	long tps_queue_low;
 	long tps_queue_high;
 
@@ -14843,6 +14837,7 @@ static int actual_load_config(int reload, struct ast_config *cfg, struct ast_con
 	ast_copy_string(imapparentfolder, "\0", sizeof(imapparentfolder));
 #endif
 	/* set audio control prompts */
+	strcpy(listen_control_forward_key, DEFAULT_LISTEN_CONTROL_FORWARD_KEY);
 	strcpy(listen_control_forward_key, DEFAULT_LISTEN_CONTROL_FORWARD_KEY);
 	strcpy(listen_control_reverse_key, DEFAULT_LISTEN_CONTROL_REVERSE_KEY);
 	strcpy(listen_control_pause_key, DEFAULT_LISTEN_CONTROL_PAUSE_KEY);
@@ -14870,11 +14865,6 @@ static int actual_load_config(int reload, struct ast_config *cfg, struct ast_con
 
 	if (cfg) {
 		/* General settings */
-
-		if (!(val = ast_variable_retrieve(cfg, "general", "userscontext")))
-			val = "default";
-		ast_copy_string(userscontext, val, sizeof(userscontext));
-
 		aliasescontext[0] = '\0';
 		val = ast_variable_retrieve(cfg, "general", "aliasescontext");
 		ast_copy_string(aliasescontext, S_OR(val, ""), sizeof(aliasescontext));
@@ -15090,7 +15080,7 @@ static int actual_load_config(int reload, struct ast_config *cfg, struct ast_con
 				smdi_iface = ast_smdi_interface_find("/dev/ttyS0");
 			}
 			if (!smdi_iface) {
-				ast_log(AST_LOG_ERROR, "No valid SMDI interface specfied, disabling SMDI voicemail notification\n");
+				ast_log(AST_LOG_ERROR, "No valid SMDI interface specified, disabling SMDI voicemail notification\n");
 			}
 		}
 
@@ -15470,31 +15460,6 @@ static int actual_load_config(int reload, struct ast_config *cfg, struct ast_con
 			ast_log(AST_LOG_WARNING, "Failed to set alert levels for voicemail taskprocessor.\n");
 		}
 
-		/* load mailboxes from users.conf */
-		if (ucfg) {
-			for (cat = ast_category_browse(ucfg, NULL); cat ; cat = ast_category_browse(ucfg, cat)) {
-				if (!strcasecmp(cat, "general")) {
-					continue;
-				}
-				if (!ast_true(ast_config_option(ucfg, cat, "hasvoicemail")))
-					continue;
-				if ((current = find_or_create(userscontext, cat))) {
-					populate_defaults(current);
-					apply_options_full(current, ast_variable_browse(ucfg, cat));
-					ast_copy_string(current->context, userscontext, sizeof(current->context));
-					if (!ast_strlen_zero(current->password) && current->passwordlocation == OPT_PWLOC_VOICEMAILCONF) {
-						current->passwordlocation = OPT_PWLOC_USERSCONF;
-					}
-
-					switch (current->passwordlocation) {
-					case OPT_PWLOC_SPOOLDIR:
-						snprintf(secretfn, sizeof(secretfn), "%s%s/%s/secret.conf", VM_SPOOL_DIR, current->context, current->mailbox);
-						read_password_from_file(secretfn, current->password, sizeof(current->password));
-					}
-				}
-			}
-		}
-
 		/* load mailboxes from voicemail.conf */
 
 		/*
@@ -15797,7 +15762,6 @@ AST_TEST_DEFINE(test_voicemail_msgcount)
 	if (!(vmu = find_user(&svm, testcontext, testmailbox)) &&
 		!(vmu = find_or_create(testcontext, testmailbox))) {
 		ast_test_status_update(test, "Cannot create vmu structure\n");
-		ast_unreplace_sigchld();
 #ifdef IMAP_STORAGE
 		chan = ast_channel_unref(chan);
 #endif
@@ -15819,7 +15783,6 @@ AST_TEST_DEFINE(test_voicemail_msgcount)
 			if ((syserr = ast_safe_system(syscmd))) {
 				ast_test_status_update(test, "Unable to create test voicemail: %s\n",
 					syserr > 0 ? strerror(syserr) : "unable to fork()");
-				ast_unreplace_sigchld();
 #ifdef IMAP_STORAGE
 				chan = ast_channel_unref(chan);
 #endif
@@ -16067,7 +16030,7 @@ AST_TEST_DEFINE(test_voicemail_load_config)
 		goto cleanup;
 	}
 
-	load_config_from_memory(1, cfg, NULL);
+	load_config_from_memory(1, cfg);
 	ast_config_destroy(cfg);
 
 #define CHECK(u, attr, value) else if (strcmp(u->attr, value)) { \
@@ -16175,7 +16138,7 @@ AST_TEST_DEFINE(test_voicemail_vm_info)
 		ast_copy_string(vminfo_args, test_items[test_counter].vminfo_test_args, sizeof(vminfo_args));
 		test_ret = acf_vm_info(chan, vminfo_cmd, vminfo_args, vminfo_buf, sizeof(vminfo_buf));
 		if (strcmp(vminfo_buf, test_items[test_counter].vminfo_expected)) {
-			ast_test_status_update(test, "VM_INFO respose was: '%s', but expected: '%s'\n", vminfo_buf, test_items[test_counter].vminfo_expected);
+			ast_test_status_update(test, "VM_INFO response was: '%s', but expected: '%s'\n", vminfo_buf, test_items[test_counter].vminfo_expected);
 			res = AST_TEST_FAIL;
 		}
 		if (!(test_ret == test_items[test_counter].vminfo_ret)) {

@@ -567,7 +567,7 @@ static int media_address_to_str(const void *obj, const intptr_t *args, char **bu
 	return 0;
 }
 
-static int redirect_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
+static int redirect_method_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
 {
 	struct ast_sip_endpoint *endpoint = obj;
 
@@ -583,6 +583,21 @@ static int redirect_handler(const struct aco_option *opt, struct ast_variable *v
 		return -1;
 	}
 
+	return 0;
+}
+
+static const char *redirect_method_map[] = {
+	[AST_SIP_REDIRECT_USER] = "user",
+	[AST_SIP_REDIRECT_URI_CORE] = "uri_core",
+	[AST_SIP_REDIRECT_URI_PJSIP] = "uri_pjsip",
+};
+
+static int redirect_method_to_str(const void *obj, const intptr_t *args, char **buf)
+{
+	const struct ast_sip_endpoint *endpoint = obj;
+	if (ARRAY_IN_BOUNDS(endpoint->redirect_method, redirect_method_map)) {
+		*buf = ast_strdup(redirect_method_map[endpoint->redirect_method]);
+	}
 	return 0;
 }
 
@@ -1695,14 +1710,6 @@ int ast_sip_for_each_channel(
 	return ast_sip_for_each_channel_snapshot(endpoint_snapshot, on_channel_snapshot, arg);
 }
 
-static int active_channels_to_str_cb(void *object, void *arg, int flags)
-{
-	const struct ast_channel_snapshot *snapshot = object;
-	struct ast_str **buf = arg;
-	ast_str_append(buf, 0, "%s,", snapshot->base->name);
-	return 0;
-}
-
 static void active_channels_to_str(const struct ast_sip_endpoint *endpoint,
 				   struct ast_str **str)
 {
@@ -1710,13 +1717,8 @@ static void active_channels_to_str(const struct ast_sip_endpoint *endpoint,
 	RAII_VAR(struct ast_endpoint_snapshot *, endpoint_snapshot,
 		 ast_sip_get_endpoint_snapshot(endpoint), ao2_cleanup);
 
-	if (endpoint_snapshot) {
-		return;
-	}
-
-	ast_sip_for_each_channel_snapshot(endpoint_snapshot,
-					  active_channels_to_str_cb, str);
-	ast_str_truncate(*str, -1);
+	ast_str_append(str, 0, "%d",
+		endpoint_snapshot ? endpoint_snapshot->num_channels : 0);
 }
 
 #define AMI_DEFAULT_STR_SIZE 512
@@ -2250,7 +2252,7 @@ int ast_res_pjsip_initialize_configuration(void)
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "srtp_tag_32", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, media.rtp.srtp_tag_32));
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "media_encryption_optimistic", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, media.rtp.encryption_optimistic));
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "g726_non_standard", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, media.g726_non_standard));
-	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "redirect_method", "user", redirect_handler, NULL, NULL, 0, 0);
+	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "redirect_method", "user", redirect_method_handler, redirect_method_to_str, NULL, 0, 0);
 	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "set_var", "", set_var_handler, set_var_to_str, set_var_to_vl, 0, 0);
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "message_context", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_endpoint, message_context));
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "accountcode", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_endpoint, accountcode));
@@ -2303,6 +2305,9 @@ int ast_res_pjsip_initialize_configuration(void)
 	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "security_mechanisms", "", security_mechanism_handler, security_mechanism_to_str, NULL, 0, 0);
 	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "security_negotiation", "no", security_negotiation_handler, security_negotiation_to_str, NULL, 0, 0);
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "send_aoc", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, send_aoc));
+	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "tenantid", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_endpoint, tenantid));
+	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "suppress_moh_on_sendonly",
+		"no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, suppress_moh_on_sendonly));
 
 	if (ast_sip_initialize_sorcery_transport()) {
 		ast_log(LOG_ERROR, "Failed to register SIP transport support with sorcery\n");
@@ -2433,6 +2438,7 @@ static void endpoint_destructor(void* obj)
 	ast_free(endpoint->contact_user);
 	ast_free_acl_list(endpoint->contact_acl);
 	ast_free_acl_list(endpoint->acl);
+	ast_sip_security_mechanisms_vector_destroy(&endpoint->security_mechanisms);
 }
 
 static int init_subscription_configuration(struct ast_sip_endpoint_subscription_configuration *subscription)
@@ -2456,7 +2462,7 @@ void *ast_sip_endpoint_alloc(const char *name)
 	if (!endpoint) {
 		return NULL;
 	}
-	if (ast_string_field_init(endpoint, 64)) {
+	if (ast_string_field_init(endpoint, 128)) {
 		ao2_cleanup(endpoint);
 		return NULL;
 	}
@@ -2467,6 +2473,10 @@ void *ast_sip_endpoint_alloc(const char *name)
 		return NULL;
 	}
 	if (ast_string_field_init_extended(endpoint, overlap_context)) {
+		ao2_cleanup(endpoint);
+		return NULL;
+	}
+	if (ast_string_field_init_extended(endpoint, tenantid)) {
 		ao2_cleanup(endpoint);
 		return NULL;
 	}

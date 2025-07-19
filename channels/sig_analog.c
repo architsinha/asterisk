@@ -1341,7 +1341,7 @@ int analog_hangup(struct analog_pvt *p, struct ast_channel *ast)
 				/* Need to hold the lock for real-call, private, and call-waiting call */
 				analog_lock_sub_owner(p, ANALOG_SUB_CALLWAIT);
 				if (!p->subs[ANALOG_SUB_CALLWAIT].owner) {
-					/* The call waiting call dissappeared. */
+					/* The call waiting call disappeared. */
 					analog_set_new_owner(p, NULL);
 					break;
 				}
@@ -1590,6 +1590,161 @@ static int analog_handles_digit(struct ast_frame *f)
 	}
 }
 
+enum callwaiting_deluxe_option {
+	CWD_CONFERENCE = '3',
+	CWD_HOLD = '6',
+	CWD_DROP = '7',
+	CWD_ANNOUNCEMENT = '8',
+	CWD_FORWARD = '9',
+};
+
+static const char *callwaiting_deluxe_optname(int option)
+{
+	switch (option) {
+	case CWD_CONFERENCE:
+		return "CONFERENCE";
+	case CWD_HOLD:
+		return "HOLD";
+	case CWD_DROP:
+		return "DROP";
+	case CWD_ANNOUNCEMENT:
+		return "ANNOUNCEMENT";
+	case CWD_FORWARD:
+		return "FORWARD";
+	default:
+		return "DEFAULT";
+	}
+}
+
+int analog_callwaiting_deluxe(struct analog_pvt *p, int option)
+{
+	const char *announce_var;
+	char announcement[PATH_MAX];
+
+	ast_debug(1, "Handling Call Waiting on channel %d with option %c: treatment %s\n", p->channel, option, callwaiting_deluxe_optname(option));
+
+	if (!p->subs[ANALOG_SUB_CALLWAIT].owner) {
+		/* This can happen if the caller hook flashes and the call waiting hangs up before the CWD timer expires (1 second) */
+		ast_debug(1, "Call waiting call disappeared before it could be handled?\n");
+		return -1;
+	}
+
+	analog_lock_sub_owner(p, ANALOG_SUB_CALLWAIT);
+	if (!p->subs[ANALOG_SUB_CALLWAIT].owner) {
+		ast_log(LOG_WARNING, "Whoa, the call-waiting call disappeared.\n");
+		return -1;
+	}
+
+	/* Note that when p->callwaitingdeluxepending, dahdi_write will drop incoming frames to the channel,
+	 * since the user shouldn't hear anything after flashing until either a DTMF has been received
+	 * or it's been a second and the decision is made automatically. */
+
+	switch (option) {
+	case CWD_CONFERENCE:
+		/* We should never have a call waiting if we have a 3-way anyways, but check just in case,
+		 * there better be no existing SUB_THREEWAY since we're going to make one (and then swap the call wait to it) */
+		if (p->subs[ANALOG_SUB_THREEWAY].owner) {
+			ast_channel_unlock(p->subs[ANALOG_SUB_CALLWAIT].owner);
+			ast_log(LOG_ERROR, "Already have a 3-way call on channel %d, can't conference!\n", p->channel);
+			return -1;
+		}
+
+		/* To conference the incoming call, swap it from SUB_CALLWAIT to SUB_THREEWAY,
+		 * and then the existing 3-way logic will ensure that flashing again will drop the call waiting */
+		analog_alloc_sub(p, ANALOG_SUB_THREEWAY);
+		analog_swap_subs(p, ANALOG_SUB_THREEWAY, ANALOG_SUB_CALLWAIT);
+		analog_unalloc_sub(p, ANALOG_SUB_CALLWAIT);
+
+		ast_verb(3, "Building conference call with %s and %s\n", ast_channel_name(p->subs[ANALOG_SUB_THREEWAY].owner), ast_channel_name(p->subs[ANALOG_SUB_REAL].owner));
+		analog_set_inthreeway(p, ANALOG_SUB_THREEWAY, 1);
+		analog_set_inthreeway(p, ANALOG_SUB_REAL, 1);
+
+		if (ast_channel_state(p->subs[ANALOG_SUB_THREEWAY].owner) == AST_STATE_RINGING) {
+			ast_setstate(p->subs[ANALOG_SUB_THREEWAY].owner, AST_STATE_UP);
+			ast_queue_control(p->subs[ANALOG_SUB_THREEWAY].owner, AST_CONTROL_ANSWER);
+			/* Stop the ringing on the call wait channel (yeah, apparently this is how it's done) */
+			ast_queue_hold(p->subs[ANALOG_SUB_THREEWAY].owner, p->mohsuggest);
+			ast_queue_unhold(p->subs[ANALOG_SUB_THREEWAY].owner);
+		}
+		analog_stop_callwait(p);
+
+		ast_channel_unlock(p->subs[ANALOG_SUB_THREEWAY].owner); /* Unlock what was originally SUB_CALLWAIT */
+		break;
+	case CWD_HOLD: /* The CI-7112 Visual Director sends "HOLD" for "Play hold message" rather than "ANNOUNCEMENT". For default behavior, nothing is actually sent. */
+	case CWD_ANNOUNCEMENT:
+		/* We can't just call ast_streamfile here, this thread isn't responsible for media on the call waiting channel.
+		 * Indicate to the dialing channel in app_dial that it needs to play media.
+		 *
+		 * This is a lot easier than other ways of trying to send early media to the channel
+		 * (such as every call from the core to dahdi_read, sending the channel one frame of the audio file, etc.)
+		 */
+
+		/* There's not a particularly good stock audio prompt to use here. The Pat Fleet library has some better
+		 * ones but we want one that is also in the default Allison Smith library. "One moment please" works okay.
+		 * Check if a variable containing the prompt to use was specified on the call waiting channel, and
+		 * fall back to a reasonable default if not. */
+
+		/* The SUB_CALLWAIT channel is already locked here, no need to lock and unlock to get the variable. */
+		announce_var = pbx_builtin_getvar_helper(p->subs[ANALOG_SUB_CALLWAIT].owner, "CALLWAITDELUXEANNOUNCEMENT");
+		ast_copy_string(announcement, S_OR(announce_var, "one-moment-please"), sizeof(announcement));
+		ast_debug(2, "Call Waiting Deluxe announcement for %s: %s\n", ast_channel_name(p->subs[ANALOG_SUB_CALLWAIT].owner), announcement);
+		ast_channel_unlock(p->subs[ANALOG_SUB_CALLWAIT].owner);
+		/* Tell app_dial what file to play. */
+		ast_queue_control_data(p->subs[ANALOG_SUB_CALLWAIT].owner, AST_CONTROL_PLAYBACK_BEGIN, announcement, strlen(announcement) + 1);
+		/* Unlike all the other options, the call waiting is still active with this option,
+		 * so we don't call analog_stop_callwait(p)
+		 * The call waiting will continue to be here, and at some later point the user can flash again and choose a finalizing option
+		 * (or even queue the announcement again... and again... and again...)
+		 */
+		break;
+	case CWD_FORWARD:
+		/* Go away, call waiting, call again some other day... */
+		analog_stop_callwait(p);
+		/* Can't use p->call_forward exten because that's for *72 forwarding, and sig_analog doesn't
+		 * have a Busy/Don't Answer call forwarding exten internally, so let the dialplan deal with it.
+		 * by sending the call to the 'f' extension.
+		 */
+		ast_channel_call_forward_set(p->subs[ANALOG_SUB_CALLWAIT].owner, "f");
+		ast_channel_unlock(p->subs[ANALOG_SUB_CALLWAIT].owner);
+		/* app_dial already has a verbose message for forwarding, so we don't really need one here also since that does the job */
+		break;
+	case CWD_DROP:
+		/* Fall through: logic is identical to hold, except we drop the original call right after we swap. */
+	default:
+		/* Swap to call-wait, same as with the non-deluxe call waiting handling. */
+		analog_swap_subs(p, ANALOG_SUB_REAL, ANALOG_SUB_CALLWAIT);
+		analog_play_tone(p, ANALOG_SUB_REAL, -1);
+		analog_set_new_owner(p, p->subs[ANALOG_SUB_REAL].owner);
+		ast_debug(1, "Making %s the new owner\n", ast_channel_name(p->owner));
+		if (ast_channel_state(p->subs[ANALOG_SUB_REAL].owner) == AST_STATE_RINGING) {
+			ast_setstate(p->subs[ANALOG_SUB_REAL].owner, AST_STATE_UP);
+			ast_queue_control(p->subs[ANALOG_SUB_REAL].owner, AST_CONTROL_ANSWER);
+		}
+		analog_stop_callwait(p);
+
+		if (option == CWD_DROP) {
+			/* Disconnect the previous call (the original call is now the SUB_CALLWAIT since we swapped above) */
+			ast_queue_hangup(p->subs[ANALOG_SUB_CALLWAIT].owner);
+			ast_verb(3, "Dropping original call and swapping to call waiting on %s\n", ast_channel_name(p->subs[ANALOG_SUB_REAL].owner));
+		} else {
+			/* Start music on hold if appropriate */
+			if (!p->subs[ANALOG_SUB_CALLWAIT].inthreeway) {
+				ast_queue_hold(p->subs[ANALOG_SUB_CALLWAIT].owner, p->mohsuggest);
+			}
+			ast_verb(3, "Holding original call and swapping to call waiting on %s\n", ast_channel_name(p->subs[ANALOG_SUB_REAL].owner));
+		}
+
+		/* Stop ringing on the incoming call */
+		ast_queue_hold(p->subs[ANALOG_SUB_REAL].owner, p->mohsuggest);
+		ast_queue_unhold(p->subs[ANALOG_SUB_REAL].owner);
+
+		/* Unlock the call-waiting call that we swapped to real-call. */
+		ast_channel_unlock(p->subs[ANALOG_SUB_REAL].owner);
+	}
+	analog_update_conf(p);
+	return 0;
+}
+
 void analog_handle_dtmf(struct analog_pvt *p, struct ast_channel *ast, enum analog_sub idx, struct ast_frame **dest)
 {
 	struct ast_frame *f = *dest;
@@ -1622,6 +1777,50 @@ void analog_handle_dtmf(struct analog_pvt *p, struct ast_channel *ast, enum anal
 			}
 			if (analog_handles_digit(f)) {
 				p->callwaitcas = 0;
+			}
+		}
+		p->subs[idx].f.frametype = AST_FRAME_NULL;
+		p->subs[idx].f.subclass.integer = 0;
+		*dest = &p->subs[idx].f;
+	}  else if (p->callwaitingdeluxepending) {
+		if (f->frametype == AST_FRAME_DTMF_END) {
+			unsigned int mssinceflash = ast_tvdiff_ms(ast_tvnow(), p->flashtime);
+			p->callwaitingdeluxepending = 0;
+
+			/* This is the case where a user explicitly took action (made a decision)
+			 * for Call Waiting Deluxe.
+			 * Because we already handled the hook flash, if the user doesn't do
+			 * anything within a second, then we still need to eventually take
+			 * the default action (swap) for the call waiting.
+			 *
+			 * dahdi_write will also drop audio if callwaitingdeluxepending is set HIGH,
+			 * and also check if flashtime hits 1000, in which case it will set the flag LOW and then take the
+			 * default action, e.g. analog_callwaiting_deluxe(p, 0);
+			 */
+
+			/* Slightly less than 1000, so there's no chance of a race condition
+			 * between do_monitor when it sees flashtime hitting 1000 and us. */
+			if (mssinceflash > 990) {
+				/* This was more than a second ago, clear the flag and process normally. */
+				/* Because another thread has to monitor channels with pending CWDs,
+				 * in theory, we shouldn't need to check this here. */
+				ast_debug(1, "It's been %u ms since the last flash, this is not a Call Waiting Deluxe DTMF\n", mssinceflash);
+				analog_cb_handle_dtmf(p, ast, idx, dest);
+				return;
+			}
+			/* Okay, actually do something now. */
+			switch (f->subclass.integer) {
+			case CWD_CONFERENCE:
+			case CWD_HOLD:
+			case CWD_DROP:
+			case CWD_ANNOUNCEMENT:
+			case CWD_FORWARD:
+				ast_debug(1, "Got some DTMF, but it's for Call Waiting Deluxe: %c\n", f->subclass.integer);
+				analog_callwaiting_deluxe(p, f->subclass.integer);
+				break;
+			default:
+				ast_log(LOG_WARNING, "Invalid Call Waiting Deluxe option (%c), using default\n", f->subclass.integer);
+				analog_callwaiting_deluxe(p, 0);
 			}
 		}
 		p->subs[idx].f.frametype = AST_FRAME_NULL;
@@ -1720,6 +1919,9 @@ static int analog_canmatch_featurecode(const char *pickupexten, const char *exte
 	}
 	if (extlen < strlen(pickupexten) && !strncmp(pickupexten, exten, extlen)) {
 		return 1;
+	}
+	if (exten[0] == '#' && extlen < 2) {
+		return 1; /* Could match ## */
 	}
 	/* hardcoded features are *60, *67, *69, *70, *72, *73, *78, *79, *82, *0 */
 	if (exten[0] == '*' && extlen < 3) {
@@ -1869,8 +2071,8 @@ static void *__analog_ss_thread(void *data)
 			case ANALOG_SIG_E911:
 			case ANALOG_SIG_FGC_CAMAMF:
 			case ANALOG_SIG_SF_FEATDMF:
-				res = analog_my_getsigstr(chan, dtmfbuf + 1, "#", 3000);
-				/* if international caca, do it again to get real ANO */
+				res = analog_my_getsigstr(chan, dtmfbuf + 1, "#ABC", 3000);
+				/* if international CAC, do it again to get real ANI */
 				if ((p->sig == ANALOG_SIG_FEATDMF) && (dtmfbuf[1] != '0')
 					&& (strlen(dtmfbuf) != 14)) {
 					if (analog_wink(p, idx)) {
@@ -1889,6 +2091,11 @@ static void *__analog_ss_thread(void *data)
 					/* if E911, take off hook */
 					if (p->sig == ANALOG_SIG_E911) {
 						analog_off_hook(p);
+					}
+					if (p->sig != ANALOG_SIG_FGC_CAMAMF) {
+						/* CAMA signaling (CAMA and CAMAMF) are handled in an if block below.
+						 * Everything else, process here. */
+						res = analog_my_getsigstr(chan, dtmfbuf + strlen(dtmfbuf), "#", 3000);
 					}
 				}
 				if (res < 1) {
@@ -1970,7 +2177,6 @@ static void *__analog_ss_thread(void *data)
 			* KP (*) and ST (#) are considered to be digits */
 
 			int cnoffset = p->ani_info_digits + 1;
-			ast_debug(1, "cnoffset: %d\n", cnoffset);
 
 			/* This is how long to wait before the wink to start ANI spill
 			 * Pulled from chan_dahdi.conf, default is 1000ms */
@@ -1979,7 +2185,7 @@ static void *__analog_ss_thread(void *data)
 				goto quit;
 			}
 			analog_off_hook(p);
-			ast_debug(1, "Sent wink to signal ANI start\n");
+			ast_debug(1, "Went off-hook to signal ANI start\n");
 			analog_dsp_set_digitmode(p, ANALOG_DIGITMODE_MF);
 
 			/* ani_timeout is configured in chan_dahdi.conf. default is 10000ms.
@@ -2078,8 +2284,8 @@ static void *__analog_ss_thread(void *data)
 				ast_copy_string(exten2, exten, sizeof(exten2));
 				/* Parse out extension and callerid */
 				stringp=exten2 +1;
-				s1 = strsep(&stringp, "#");
-				s2 = strsep(&stringp, "#");
+				s1 = strsep(&stringp, "#ABC");
+				s2 = strsep(&stringp, "#ABC");
 				if (s2 && (*(s2 + 1) == '0')) {
 					if (*(s2 + 2)) {
 						ast_set_callerid(chan, s2 + 2, NULL, s2 + 2);
@@ -2203,6 +2409,19 @@ static void *__analog_ss_thread(void *data)
 			if (ast_parking_provider_registered()) {
 				is_exten_parking = ast_parking_is_exten_park(ast_channel_context(chan), exten);
 			}
+			if (p->lastnumredial && !strcmp(exten, "##") && !ast_exists_extension(chan, ast_channel_context(chan), "##", 1, p->cid_num)) {
+				/* Last Number Redial */
+				if (!ast_strlen_zero(p->lastexten)) {
+					ast_verb(4, "Redialing last number dialed on channel %d\n", p->channel);
+					ast_copy_string(exten, p->lastexten, sizeof(exten));
+				} else {
+					ast_verb(3, "Last Number Redial not possible on channel %d (no saved number)\n", p->channel);
+					res = analog_play_tone(p, idx, ANALOG_TONE_CONGESTION);
+					analog_wait_event(p);
+					ast_hangup(chan);
+					goto quit;
+				}
+			}
 			if (ast_exists_extension(chan, ast_channel_context(chan), exten, 1, p->cid_num) && !is_exten_parking) {
 				if (!res || !ast_matchmore_extension(chan, ast_channel_context(chan), exten, 1, p->cid_num)) {
 					if (getforward) {
@@ -2224,6 +2443,11 @@ static void *__analog_ss_thread(void *data)
 						res = analog_play_tone(p, idx, -1);
 						ast_channel_lock(chan);
 						ast_channel_exten_set(chan, exten);
+
+						/* Save the last number dialed, for Last Number Redial. */
+						if (!p->immediate) {
+							ast_copy_string(p->lastexten, exten, sizeof(p->lastexten));
+						}
 
 						/* Properly set the presentation.
 						 * We need to do this here as well, because p->hidecallerid might be set
@@ -2965,6 +3189,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 				break;
 			}
 		}
+		p->callwaitingdeluxepending = 0;
 		ast_queue_control_data(ast, AST_CONTROL_PVT_CAUSE_CODE, cause_code, data_size);
 		ast_channel_hangupcause_hash_set(ast, cause_code, data_size);
 		switch (p->sig) {
@@ -3280,6 +3505,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 		}
 		/* Remember last time we got a flash-hook */
 		gettimeofday(&p->flashtime, NULL);
+		p->callwaitingdeluxepending = 0;
 		switch (mysig) {
 		case ANALOG_SIG_FXOLS:
 		case ANALOG_SIG_FXOGS:
@@ -3301,11 +3527,25 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 				analog_lock_sub_owner(p, ANALOG_SUB_CALLWAIT);
 				if (!p->subs[ANALOG_SUB_CALLWAIT].owner) {
 					/*
-					 * The call waiting call dissappeared.
+					 * The call waiting call disappeared.
 					 * Let's just ignore this flash-hook.
 					 */
 					ast_log(LOG_NOTICE, "Whoa, the call-waiting call disappeared.\n");
 					goto winkflashdone;
+				}
+
+				/* If line has Call Waiting Deluxe, see what the user wants to do.
+				 * Only do this if this is an as yet unanswered call waiting, not an existing, answered SUB_CALLWAIT. */
+				if (ast_channel_state(p->subs[ANALOG_SUB_CALLWAIT].owner) == AST_STATE_RINGING) {
+					if (p->callwaitingdeluxe) {
+						/* This thread cannot block, so just set the flag that we need
+						 * to wait for a Call Waiting Deluxe option (or let it time out),
+						 * and then we're done for now. */
+						ast_channel_unlock(p->subs[ANALOG_SUB_CALLWAIT].owner);
+						p->callwaitingdeluxepending = 1;
+						ast_debug(1, "Deferring call waiting manipulation, waiting for Call Waiting Deluxe option from user\n");
+						goto winkflashdone;
+					}
 				}
 
 				/* Swap to call-wait */
@@ -3428,7 +3668,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 				analog_lock_sub_owner(p, ANALOG_SUB_THREEWAY);
 				if (!p->subs[ANALOG_SUB_THREEWAY].owner) {
 					/*
-					 * The 3-way call dissappeared.
+					 * The 3-way call disappeared.
 					 * Let's just ignore this flash-hook.
 					 */
 					ast_log(LOG_NOTICE, "Whoa, the 3-way call disappeared.\n");
@@ -3662,7 +3902,7 @@ winkflashdone:
 		}
 
 		/* Added more log_debug information below to provide a better indication of what is going on */
-		ast_debug(1, "Polarity Reversal event occured - DEBUG 2: channel %d, state %u, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %" PRIi64 "\n", p->channel, ast_channel_state(ast), p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
+		ast_debug(1, "Polarity Reversal event occurred - DEBUG 2: channel %d, state %u, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %" PRIi64 "\n", p->channel, ast_channel_state(ast), p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
 		break;
 	default:
 		ast_debug(1, "Dunno what to do with event %d on channel %d\n", res, p->channel);
@@ -3842,6 +4082,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 			res = analog_off_hook(i);
 			i->fxsoffhookstate = 1;
 			i->cshactive = 0;
+			i->callwaitingdeluxepending = 0;
 			if (res && (errno == EBUSY)) {
 				break;
 			}
